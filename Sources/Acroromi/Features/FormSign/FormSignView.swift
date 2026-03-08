@@ -93,7 +93,8 @@ class ImageStampAnnotation: PDFAnnotation {
     }
 
     required init?(coder: NSCoder) {
-        fatalError("init(coder:) not implemented")
+        // FIX: Return nil instead of fatalError to prevent crashes on decode
+        return nil
     }
 
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
@@ -209,9 +210,10 @@ struct SignaturePadSheet: View {
                 let bezier = NSBezierPath()
                 bezier.lineWidth = 2
                 if let first = pathPoints.first {
-                    bezier.move(to: NSPoint(x: first.x, y: first.y))
+                    // FIX: Flip Y coordinates — SwiftUI Canvas (top-left origin) → NSImage (bottom-left origin)
+                    bezier.move(to: NSPoint(x: first.x, y: size.height - first.y))
                     for point in pathPoints.dropFirst() {
-                        bezier.line(to: NSPoint(x: point.x, y: point.y))
+                        bezier.line(to: NSPoint(x: point.x, y: size.height - point.y))
                     }
                     bezier.stroke()
                 }

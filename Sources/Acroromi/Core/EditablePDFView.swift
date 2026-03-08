@@ -30,6 +30,12 @@ class EditablePDFView: PDFView {
     private var lastHoverTime: TimeInterval = 0
     private let hoverThrottleInterval: TimeInterval = 0.016
 
+    // Guard against double-commit race condition
+    private var isCommitting = false
+
+    // Track original editor height for shrink support
+    private var originalEditorHeight: CGFloat = 0
+
     // Sejda-style colors
     private let editorBorderColor = NSColor(red: 0.016, green: 0.510, blue: 0.898, alpha: 0.7)
     private let editorShadowColor = NSColor(red: 0.016, green: 0.510, blue: 0.898, alpha: 0.15)
@@ -146,17 +152,16 @@ class EditablePDFView: PDFView {
         let pagePoint = convert(viewPoint, to: page)
 
         // Check if clicking inside the current editor
-        if let container = editContainerView {
-            let containerPoint = container.superview?.convert(
-                convert(viewPoint, from: nil), from: self
-            ) ?? .zero
+        // FIX: Use viewPoint directly (already converted from window coordinates)
+        if let container = editContainerView, let superview = container.superview {
+            let containerPoint = superview.convert(viewPoint, from: self)
             if container.frame.contains(containerPoint) {
                 // Clicking inside editor — let NSTextView handle it
                 return
             }
         }
 
-        // Commit previous edit with animation
+        // Commit previous edit with animation (guard against race condition)
         if editTextView != nil {
             commitEditAnimated()
         }
@@ -168,6 +173,9 @@ class EditablePDFView: PDFView {
     }
 
     private func detectAndOpenEditor(at pagePoint: CGPoint, on page: PDFPage) {
+        // Don't open a new editor while committing
+        guard !isCommitting else { return }
+
         if let selection = thoroughFindTextBlock(at: pagePoint, on: page) {
             let text = selection.string ?? ""
             let bounds = selection.bounds(for: page)
@@ -500,6 +508,8 @@ class EditablePDFView: PDFView {
 
         editTextView = textView
         editContainerView = container
+        // FIX: Track original height for shrink support
+        originalEditorHeight = container.frame.height
 
         // Animate fade-in
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -545,15 +555,20 @@ class EditablePDFView: PDFView {
     }
 
     /// Animated commit: fade-out editor, then apply annotation
+    /// FIX: Memory leak — keep references alive until animation completes, then remove from superview
+    /// FIX: Race condition — use isCommitting flag to prevent double-commit
     private func commitEditAnimated() {
-        guard let container = editContainerView else {
+        guard !isCommitting else { return }
+        isCommitting = true
+
+        guard let container = editContainerView, let textView = editTextView else {
+            isCommitting = false
             commitEditInternal()
             return
         }
 
-        // Capture values before cleanup
-        let textView = editTextView
-        let newText = textView?.string ?? ""
+        // Capture values before any cleanup
+        let newText = textView.string
         let page = editingPage
         let bounds = editingBounds
         let originalText = editingOriginalText
@@ -561,23 +576,33 @@ class EditablePDFView: PDFView {
         let fontColor = detectedFontColor
         let alignment = detectedAlignment
 
+        // FIX: Keep strong references to container/textView for animation
+        // Don't nil them out before animation completes
+        let capturedContainer = container
+        let capturedTextView = textView
+
+        // Clear our references immediately so new editor can be opened
+        editTextView = nil
+        editContainerView = nil
+        editingPage = nil
+        editingBounds = .zero
+        editingOriginalText = ""
+
         // Fade-out animation
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.12
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            container.animator().alphaValue = 0
+            capturedContainer.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
             // Apply annotation after fade completes
             if let page = page, newText != originalText && !newText.isEmpty {
                 self?.applyTextAnnotation(to: page, bounds: bounds, text: newText, font: font, fontColor: fontColor, alignment: alignment)
             }
-            self?.cleanupEditor()
+            // FIX: Remove views from superview after animation (prevents memory leak)
+            capturedTextView.removeFromSuperview()
+            capturedContainer.removeFromSuperview()
+            self?.isCommitting = false
         })
-
-        // Clear references so we don't double-commit
-        editTextView = nil
-        editContainerView = nil
-        editingPage = nil
     }
 
     private func commitEditInternal() {
@@ -639,12 +664,27 @@ class EditablePDFView: PDFView {
             return
         }
 
+        // FIX: Keep reference for animation
+        let capturedContainer = container
+        let capturedTextView = editTextView
+
+        // Clear references immediately
+        editTextView = nil
+        editContainerView = nil
+
         // Fade-out on cancel too
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.1
-            container.animator().alphaValue = 0
+            capturedContainer.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            self?.cleanupEditor()
+            capturedTextView?.removeFromSuperview()
+            capturedContainer.removeFromSuperview()
+            self?.editingPage = nil
+            self?.editingBounds = .zero
+            self?.editingOriginalText = ""
+            self?.detectedFont = NSFont.systemFont(ofSize: 12)
+            self?.detectedFontColor = .black
+            self?.detectedAlignment = .left
         })
     }
 
@@ -659,6 +699,7 @@ class EditablePDFView: PDFView {
         detectedFont = NSFont.systemFont(ofSize: 12)
         detectedFontColor = .black
         detectedAlignment = .left
+        isCommitting = false
     }
 }
 
@@ -685,22 +726,29 @@ extension EditablePDFView: NSTextViewDelegate {
     }
 
     // Auto-resize editor as user types
+    // FIX: Safe optional unwrap for textContainer (no force unwrap)
+    // FIX: Allow shrink back to original height
     func textDidChange(_ notification: Notification) {
         guard let textView = editTextView, let container = editContainerView else { return }
         let padding: CGFloat = 3
 
+        // FIX: Use optional binding instead of force-unwrap
+        guard let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
+
         // Calculate needed height
-        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
-        let usedRect = textView.layoutManager?.usedRect(for: textView.textContainer!) ?? .zero
+        layoutManager.ensureLayout(for: textContainer)
+        let usedRect = layoutManager.usedRect(for: textContainer)
         let neededHeight = usedRect.height + padding * 2 + 4
 
-        // Only grow, don't shrink below original
-        let minHeight = container.frame.height
-        if neededHeight > minHeight {
+        // FIX: Allow both growing and shrinking, but not below original height
+        let targetHeight = max(neededHeight, originalEditorHeight)
+        let currentHeight = container.frame.height
+
+        if abs(targetHeight - currentHeight) > 2 {
             var newFrame = container.frame
-            // Expand downward (PDF coordinate: expand upward in view)
-            newFrame.size.height = neededHeight
-            newFrame.origin.y = container.frame.maxY - neededHeight
+            newFrame.size.height = targetHeight
+            newFrame.origin.y = container.frame.maxY - targetHeight
 
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.08
@@ -710,7 +758,7 @@ extension EditablePDFView: NSTextViewDelegate {
             textView.frame = NSRect(
                 x: padding, y: padding,
                 width: newFrame.width - padding * 2,
-                height: neededHeight - padding * 2
+                height: targetHeight - padding * 2
             )
         }
     }

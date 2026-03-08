@@ -44,6 +44,19 @@ class AppState {
     }
 
     func openDocument(at url: URL) {
+        // FIX: Check for unsaved changes before opening new document
+        if hasDocument && documentState.hasUnsavedChanges {
+            let result = showUnsavedChangesAlert()
+            switch result {
+            case .save:
+                saveDocument()
+            case .discard:
+                break
+            case .cancel:
+                return // user cancelled, don't open new doc
+            }
+        }
+
         if documentState.loadDocument(from: url) {
             addToRecentDocuments(url)
             if documentState.isEncrypted && !documentState.isUnlocked {

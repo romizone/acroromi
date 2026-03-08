@@ -7,7 +7,7 @@ struct MainToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             Button(action: { appState.showSidebar.toggle() }) {
-                Image(systemName: appState.showSidebar ? "sidebar.left" : "sidebar.left")
+                Image(systemName: appState.showSidebar ? "sidebar.leading" : "sidebar.left")
                     .foregroundColor(appState.showSidebar ? SejdaTheme.primary : .secondary)
             }
             .help("Toggle Pages Panel")

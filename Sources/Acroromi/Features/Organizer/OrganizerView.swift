@@ -85,7 +85,8 @@ struct OrganizerView: View {
         for index in selectedPages.sorted().reversed() {
             PDFDocumentManager.deletePage(doc, at: index)
         }
-        appState.documentState.totalPages = doc.pageCount
+        // FIX: Clamp currentPageIndex after deletion (totalPages is now computed)
+        appState.documentState.clampCurrentPage()
         selectedPages.removeAll()
         appState.documentState.hasUnsavedChanges = true
     }
@@ -199,7 +200,6 @@ struct MergeFilesSheet: View {
     private func mergeFiles() {
         if let merged = PDFDocumentManager.mergeDocuments(fileURLs) {
             appState.documentState.pdfDocument = merged
-            appState.documentState.totalPages = merged.pageCount
             appState.documentState.currentPageIndex = 0
             appState.documentState.fileName = "Merged.pdf"
             appState.documentState.hasUnsavedChanges = true

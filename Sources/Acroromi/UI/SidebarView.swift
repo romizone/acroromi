@@ -334,12 +334,25 @@ struct SearchSidebarView: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundColor(SejdaTheme.textSecondary)
                     Spacer()
-                    Button(action: { _ = appState.documentState.previousSearchResult() }) {
+                    // FIX: Navigate to search result page instead of discarding selection
+                    Button(action: {
+                        if let sel = appState.documentState.previousSearchResult(),
+                           let page = sel.pages.first,
+                           let doc = appState.documentState.pdfDocument {
+                            appState.documentState.currentPageIndex = doc.index(for: page)
+                        }
+                    }) {
                         Image(systemName: "chevron.up")
                             .font(.system(size: 10))
                     }
                     .buttonStyle(.borderless)
-                    Button(action: { _ = appState.documentState.nextSearchResult() }) {
+                    Button(action: {
+                        if let sel = appState.documentState.nextSearchResult(),
+                           let page = sel.pages.first,
+                           let doc = appState.documentState.pdfDocument {
+                            appState.documentState.currentPageIndex = doc.index(for: page)
+                        }
+                    }) {
                         Image(systemName: "chevron.down")
                             .font(.system(size: 10))
                     }

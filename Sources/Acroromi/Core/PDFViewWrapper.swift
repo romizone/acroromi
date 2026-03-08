@@ -29,6 +29,9 @@ struct PDFViewWrapper: NSViewRepresentable {
     }
 
     func updateNSView(_ pdfView: EditablePDFView, context: Context) {
+        // FIX: Update coordinator's parent to prevent stale struct
+        context.coordinator.parent = self
+
         // Document change
         if pdfView.document !== document {
             pdfView.document = document

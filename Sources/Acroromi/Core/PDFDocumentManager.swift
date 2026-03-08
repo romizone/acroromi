@@ -69,7 +69,8 @@ struct PDFDocumentManager {
             let newDoc = PDFDocument()
             var idx = 0
             for pageNum in range {
-                guard pageNum < document.pageCount,
+                // FIX: Guard against negative page numbers
+                guard pageNum >= 0, pageNum < document.pageCount,
                       let page = document.page(at: pageNum) else { continue }
                 newDoc.insert(page, at: idx)
                 idx += 1
@@ -85,7 +86,8 @@ struct PDFDocumentManager {
         let newDoc = PDFDocument()
         var idx = 0
         for pageIndex in indices.sorted() {
-            guard pageIndex < document.pageCount,
+            // FIX: Guard against negative indices
+            guard pageIndex >= 0, pageIndex < document.pageCount,
                   let page = document.page(at: pageIndex) else { continue }
             newDoc.insert(page, at: idx)
             idx += 1
@@ -94,20 +96,27 @@ struct PDFDocumentManager {
     }
 
     static func rotatePage(_ document: PDFDocument, at index: Int, by degrees: Int) {
-        guard let page = document.page(at: index) else { return }
-        page.rotation = (page.rotation + degrees) % 360
+        // FIX: Guard against negative index
+        guard index >= 0, index < document.pageCount,
+              let page = document.page(at: index) else { return }
+        // FIX: Normalize rotation to always be positive (0, 90, 180, 270)
+        let newRotation = ((page.rotation + degrees) % 360 + 360) % 360
+        page.rotation = newRotation
     }
 
     static func deletePage(_ document: PDFDocument, at index: Int) {
-        guard index < document.pageCount else { return }
+        // FIX: Guard against negative index
+        guard index >= 0, index < document.pageCount else { return }
         document.removePage(at: index)
     }
 
     static func movePage(_ document: PDFDocument, from sourceIndex: Int, to destinationIndex: Int) {
-        guard sourceIndex < document.pageCount,
+        // FIX: Guard against negative indices
+        guard sourceIndex >= 0, sourceIndex < document.pageCount,
+              destinationIndex >= 0,
               let page = document.page(at: sourceIndex) else { return }
         document.removePage(at: sourceIndex)
         let adjustedDest = destinationIndex > sourceIndex ? destinationIndex - 1 : destinationIndex
-        document.insert(page, at: min(adjustedDest, document.pageCount))
+        document.insert(page, at: max(0, min(adjustedDest, document.pageCount)))
     }
 }

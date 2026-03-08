@@ -5,7 +5,6 @@ import PDFKit
 class DocumentState {
     var pdfDocument: PDFDocument?
     var currentPageIndex: Int = 0
-    var totalPages: Int = 0
     var scaleFactor: CGFloat = 1.0
     var displayMode: PDFDisplayModeOption = .singleContinuous
     var isEncrypted: Bool = false
@@ -16,6 +15,11 @@ class DocumentState {
     var searchText: String = ""
     var searchResults: [PDFSelection] = []
     var currentSearchIndex: Int = 0
+
+    // FIX: Make totalPages a computed property so it's always up-to-date after page operations
+    var totalPages: Int {
+        pdfDocument?.pageCount ?? 0
+    }
 
     var pageLabel: String {
         guard totalPages > 0 else { return "No Document" }
@@ -37,11 +41,14 @@ class DocumentState {
             isEncrypted = false
             isUnlocked = true
         }
-        totalPages = doc.pageCount
         currentPageIndex = 0
         fileName = url.lastPathComponent
         fileURL = url
         hasUnsavedChanges = false
+        // FIX: Clear search results when loading new document
+        searchText = ""
+        searchResults = []
+        currentSearchIndex = 0
         return true
     }
 
@@ -49,7 +56,6 @@ class DocumentState {
         guard let doc = pdfDocument else { return false }
         if doc.unlock(withPassword: password) {
             isUnlocked = true
-            totalPages = doc.pageCount
             return true
         }
         return false
@@ -80,7 +86,7 @@ class DocumentState {
             return
         }
         searchResults = doc.findString(searchText, withOptions: .caseInsensitive)
-        currentSearchIndex = searchResults.isEmpty ? 0 : 0
+        currentSearchIndex = 0
     }
 
     func nextSearchResult() -> PDFSelection? {
@@ -93,5 +99,14 @@ class DocumentState {
         guard !searchResults.isEmpty else { return nil }
         currentSearchIndex = (currentSearchIndex - 1 + searchResults.count) % searchResults.count
         return searchResults[currentSearchIndex]
+    }
+
+    // FIX: Clamp currentPageIndex to valid range after page operations
+    func clampCurrentPage() {
+        if totalPages > 0 {
+            currentPageIndex = max(0, min(currentPageIndex, totalPages - 1))
+        } else {
+            currentPageIndex = 0
+        }
     }
 }

@@ -15,6 +15,8 @@ struct SearchBarView: View {
                 .font(.system(size: 12))
                 .onSubmit {
                     appState.documentState.performSearch()
+                    // FIX: Navigate to first search result after performing search
+                    navigateToCurrentResult()
                 }
 
             if !appState.documentState.searchResults.isEmpty {
@@ -26,13 +28,20 @@ struct SearchBarView: View {
                     .background(SejdaTheme.controlBg)
                     .cornerRadius(4)
 
-                Button(action: { _ = appState.documentState.previousSearchResult() }) {
+                // FIX: Actually navigate to search results instead of discarding return value
+                Button(action: {
+                    let _ = appState.documentState.previousSearchResult()
+                    navigateToCurrentResult()
+                }) {
                     Image(systemName: "chevron.up")
                         .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.borderless)
 
-                Button(action: { _ = appState.documentState.nextSearchResult() }) {
+                Button(action: {
+                    let _ = appState.documentState.nextSearchResult()
+                    navigateToCurrentResult()
+                }) {
                     Image(systemName: "chevron.down")
                         .font(.system(size: 10, weight: .semibold))
                 }
@@ -53,5 +62,18 @@ struct SearchBarView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .background(Color(nsColor: .controlBackgroundColor))
+    }
+
+    // FIX: Navigate PDFView to the current search result's page
+    private func navigateToCurrentResult() {
+        let results = appState.documentState.searchResults
+        let index = appState.documentState.currentSearchIndex
+        guard !results.isEmpty, index < results.count else { return }
+
+        let selection = results[index]
+        if let page = selection.pages.first,
+           let doc = appState.documentState.pdfDocument {
+            appState.documentState.currentPageIndex = doc.index(for: page)
+        }
     }
 }

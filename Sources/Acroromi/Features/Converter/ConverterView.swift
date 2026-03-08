@@ -64,7 +64,6 @@ struct ConverterToolbarView: View {
             appState.documentState.pdfDocument = doc
             appState.documentState.fileName = "Imported.pdf"
         }
-        appState.documentState.totalPages = doc.pageCount
         appState.documentState.hasUnsavedChanges = true
     }
 
@@ -121,7 +120,6 @@ struct ConverterToolbarView: View {
 
             if let newDoc = PDFDocument(data: data as Data) {
                 appState.documentState.pdfDocument = newDoc
-                appState.documentState.totalPages = newDoc.pageCount
                 appState.documentState.fileName = "WebPage.pdf"
                 appState.documentState.hasUnsavedChanges = true
             }
@@ -270,7 +268,11 @@ struct ExportPagesSheet: View {
         for part in parts {
             let bounds = part.components(separatedBy: "-").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
             if bounds.count == 2 {
-                for p in max(1, bounds[0])...min(maxPage, bounds[1]) {
+                // FIX: Guard against reversed range (bounds[0] > bounds[1])
+                let start = max(1, min(bounds[0], bounds[1]))
+                let end = min(maxPage, max(bounds[0], bounds[1]))
+                guard start <= end else { continue }
+                for p in start...end {
                     indices.append(p - 1)
                 }
             } else if bounds.count == 1, bounds[0] >= 1, bounds[0] <= maxPage {

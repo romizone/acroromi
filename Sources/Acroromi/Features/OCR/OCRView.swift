@@ -1,5 +1,5 @@
 import SwiftUI
-import PDFKit
+@preconcurrency import PDFKit
 import Vision
 
 struct OCRToolbarView: View {
@@ -162,55 +162,69 @@ struct OCRToolbarView: View {
         statusMessage = ""
     }
 
+    // FIX: Move heavy image rendering and Vision processing to background thread
     private func processPage(_ page: PDFPage, in doc: PDFDocument, at index: Int) async {
         let pageBounds = page.bounds(for: .mediaBox)
         let scale: CGFloat = 2.0
         let imageWidth = Int(pageBounds.width * scale)
         let imageHeight = Int(pageBounds.height * scale)
+        let capturedRecognitionLevel = recognitionLevel
+        let capturedLanguages = Array(selectedLanguages)
 
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: nil,
-            width: imageWidth,
-            height: imageHeight,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return }
+        // Perform heavy work on background thread
+        let observations: [VNRecognizedTextObservation] = await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let colorSpace = CGColorSpaceCreateDeviceRGB()
+                guard let context = CGContext(
+                    data: nil,
+                    width: imageWidth,
+                    height: imageHeight,
+                    bitsPerComponent: 8,
+                    bytesPerRow: 0,
+                    space: colorSpace,
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+                ) else {
+                    continuation.resume(returning: [])
+                    return
+                }
 
-        context.scaleBy(x: scale, y: scale)
+                context.scaleBy(x: scale, y: scale)
 
-        // Draw page to context
-        NSGraphicsContext.saveGraphicsState()
-        let nsContext = NSGraphicsContext(cgContext: context, flipped: false)
-        NSGraphicsContext.current = nsContext
-        page.draw(with: .mediaBox, to: context)
-        NSGraphicsContext.restoreGraphicsState()
+                // Draw page to context
+                NSGraphicsContext.saveGraphicsState()
+                let nsContext = NSGraphicsContext(cgContext: context, flipped: false)
+                NSGraphicsContext.current = nsContext
+                page.draw(with: .mediaBox, to: context)
+                NSGraphicsContext.restoreGraphicsState()
 
-        guard let cgImage = context.makeImage() else { return }
+                guard let cgImage = context.makeImage() else {
+                    continuation.resume(returning: [])
+                    return
+                }
 
-        // Perform OCR
-        let request = VNRecognizeTextRequest()
-        request.recognitionLevel = recognitionLevel
-        request.recognitionLanguages = Array(selectedLanguages)
-        request.usesLanguageCorrection = true
+                // Perform OCR
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = capturedRecognitionLevel
+                request.recognitionLanguages = capturedLanguages
+                request.usesLanguageCorrection = true
 
-        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return
+                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                do {
+                    try handler.perform([request])
+                } catch {
+                    continuation.resume(returning: [])
+                    return
+                }
+
+                continuation.resume(returning: request.results ?? [])
+            }
         }
 
-        guard let observations = request.results else { return }
-
-        // Add invisible text annotations for each recognized text
+        // Add annotations on main thread (UI work)
         for observation in observations {
             guard let topCandidate = observation.topCandidates(1).first else { continue }
 
             let boundingBox = observation.boundingBox
-            // Convert normalized coordinates to page coordinates
             let annotBounds = CGRect(
                 x: boundingBox.origin.x * pageBounds.width,
                 y: boundingBox.origin.y * pageBounds.height,
@@ -218,12 +232,11 @@ struct OCRToolbarView: View {
                 height: boundingBox.height * pageBounds.height
             )
 
-            // Create invisible text annotation (searchable but not visible)
             let annotation = PDFAnnotation(bounds: annotBounds, forType: .freeText, withProperties: nil)
             annotation.contents = topCandidate.string
             annotation.font = NSFont.systemFont(ofSize: max(annotBounds.height * 0.8, 6))
-            annotation.fontColor = NSColor.clear // Invisible text
-            annotation.color = NSColor.clear     // No background
+            annotation.fontColor = NSColor.clear
+            annotation.color = NSColor.clear
             let border = PDFBorder()
             border.lineWidth = 0
             annotation.border = border
@@ -291,7 +304,6 @@ struct ImportImagesSheet: View {
         }
         if doc.pageCount > 0 {
             appState.documentState.pdfDocument = doc
-            appState.documentState.totalPages = doc.pageCount
             appState.documentState.currentPageIndex = 0
             appState.documentState.fileName = "Scanned.pdf"
             appState.documentState.hasUnsavedChanges = true
