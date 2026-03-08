@@ -1,9 +1,10 @@
 import AppKit
 import PDFKit
 import Vision
+import QuartzCore
 
-/// Custom PDFView subclass that supports Word-like click-to-edit text.
-/// Detects original font from PDF and preserves it in the replacement.
+/// Custom PDFView subclass that supports Sejda-style smooth click-to-edit text.
+/// Fixes: animation, hover lag, font detection, editor positioning, commit transitions.
 class EditablePDFView: PDFView {
 
     var isEditModeActive = false
@@ -20,20 +21,25 @@ class EditablePDFView: PDFView {
     private var detectedFontColor: NSColor = .black
     private var detectedAlignment: NSTextAlignment = .left
 
-    // Highlight box shown on hover
+    // Hover highlight
     private var hoverHighlight: NSView?
     private var lastHoverPage: PDFPage?
     private var lastHoverBounds: CGRect = .zero
 
-    // Throttle hover detection to avoid excessive computation
+    // Throttle hover - reduced to ~16ms (1 frame at 60fps) for smooth cursor
     private var lastHoverTime: TimeInterval = 0
-    private let hoverThrottleInterval: TimeInterval = 0.05 // 50ms
+    private let hoverThrottleInterval: TimeInterval = 0.016
+
+    // Sejda-style colors
+    private let editorBorderColor = NSColor(red: 0.016, green: 0.510, blue: 0.898, alpha: 0.7)
+    private let editorShadowColor = NSColor(red: 0.016, green: 0.510, blue: 0.898, alpha: 0.15)
+    private let hoverHighlightColor = NSColor(red: 0.016, green: 0.510, blue: 0.898, alpha: 0.05)
+    private let hoverBorderColor = NSColor(red: 0.016, green: 0.510, blue: 0.898, alpha: 0.20)
 
     // MARK: - Cursor
 
     override func cursorUpdate(with event: NSEvent) {
         if isEditModeActive {
-            // Use fast detection only (line/word) for cursor - no expensive scans
             let viewPoint = convert(event.locationInWindow, from: nil)
             if let page = page(for: viewPoint, nearest: false) {
                 let pagePoint = convert(viewPoint, to: page)
@@ -58,7 +64,6 @@ class EditablePDFView: PDFView {
     // MARK: - Mouse Tracking
 
     override func updateTrackingAreas() {
-        // Only remove tracking areas we own (tagged with our userInfo)
         for area in trackingAreas where area.owner === self && area.userInfo?["editMode"] != nil {
             removeTrackingArea(area)
         }
@@ -75,13 +80,27 @@ class EditablePDFView: PDFView {
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard isEditModeActive, editTextView == nil else {
-            if editTextView == nil { hideHoverHighlight() }
+        guard isEditModeActive else {
+            hideHoverHighlight()
             super.mouseMoved(with: event)
             return
         }
 
-        // Throttle hover detection for smooth performance
+        // If editor is active, still update cursor for text areas but skip hover highlight
+        if editTextView != nil {
+            let viewPoint = convert(event.locationInWindow, from: nil)
+            if let page = page(for: viewPoint, nearest: false) {
+                let pagePoint = convert(viewPoint, to: page)
+                if fastTextHitTest(at: pagePoint, on: page) {
+                    NSCursor.iBeam.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
+            return
+        }
+
+        // Throttle hover detection — 16ms (1 frame)
         let now = CACurrentMediaTime()
         guard now - lastHoverTime >= hoverThrottleInterval else { return }
         lastHoverTime = now
@@ -89,12 +108,12 @@ class EditablePDFView: PDFView {
         let viewPoint = convert(event.locationInWindow, from: nil)
         guard let page = page(for: viewPoint, nearest: false) else {
             hideHoverHighlight()
+            NSCursor.arrow.set()
             return
         }
 
         let pagePoint = convert(viewPoint, to: page)
 
-        // Use fast detection for hover (line + word only, no area scanning)
         if let selection = fastFindTextBlock(at: pagePoint, on: page) {
             let text = selection.string ?? ""
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -117,35 +136,49 @@ class EditablePDFView: PDFView {
             return
         }
 
-        if editTextView != nil {
-            commitEdit()
-        }
-
         let viewPoint = convert(event.locationInWindow, from: nil)
         guard let page = page(for: viewPoint, nearest: false) else {
+            if editTextView != nil { commitEditAnimated() }
             super.mouseDown(with: event)
             return
         }
 
         let pagePoint = convert(viewPoint, to: page)
 
-        // On click, use thorough detection (includes area scanning + offset probing)
+        // Check if clicking inside the current editor
+        if let container = editContainerView {
+            let containerPoint = container.superview?.convert(
+                convert(viewPoint, from: nil), from: self
+            ) ?? .zero
+            if container.frame.contains(containerPoint) {
+                // Clicking inside editor — let NSTextView handle it
+                return
+            }
+        }
+
+        // Commit previous edit with animation
+        if editTextView != nil {
+            commitEditAnimated()
+        }
+
+        // Dispatch detection to next runloop tick to allow commit animation to start
+        DispatchQueue.main.async { [weak self] in
+            self?.detectAndOpenEditor(at: pagePoint, on: page)
+        }
+    }
+
+    private func detectAndOpenEditor(at pagePoint: CGPoint, on page: PDFPage) {
         if let selection = thoroughFindTextBlock(at: pagePoint, on: page) {
             let text = selection.string ?? ""
             let bounds = selection.bounds(for: page)
 
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                super.mouseDown(with: event)
-                return
-            }
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
             editingPage = page
             editingBounds = bounds
             editingOriginalText = text
 
-            // Detect original font attributes from PDF
             detectFontAttributes(selection: selection, page: page)
-
             hideHoverHighlight()
 
             if let doc = document {
@@ -154,24 +187,19 @@ class EditablePDFView: PDFView {
             }
 
             showInlineEditor(for: page, bounds: bounds, text: text)
-        } else {
-            super.mouseDown(with: event)
         }
     }
 
-    // MARK: - Scroll/Zoom observation (cleanup stale overlays)
+    // MARK: - Scroll/Zoom
 
     override func layout() {
         super.layout()
-        // When layout changes (zoom/scroll), remove stale hover highlight
         hideHoverHighlight()
-        // Reposition editor if active
         repositionEditor()
     }
 
-    // MARK: - Text Detection (Fast vs Thorough)
+    // MARK: - Text Detection
 
-    /// Fast hit test: just check if there's text at point (for cursor/hover)
     private func fastTextHitTest(at point: CGPoint, on page: PDFPage) -> Bool {
         if let sel = page.selectionForLine(at: point), let text = sel.string,
            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -184,7 +212,6 @@ class EditablePDFView: PDFView {
         return false
     }
 
-    /// Fast detection: line or word only (used for mouseMoved hover)
     private func fastFindTextBlock(at point: CGPoint, on page: PDFPage) -> PDFSelection? {
         if let selection = page.selectionForLine(at: point) {
             let text = selection.string ?? ""
@@ -201,14 +228,11 @@ class EditablePDFView: PDFView {
         return nil
     }
 
-    /// Thorough detection: line → word → area scan → offset probing (used on click)
     private func thoroughFindTextBlock(at point: CGPoint, on page: PDFPage) -> PDFSelection? {
-        // 1. Fast path first
         if let selection = fastFindTextBlock(at: point, on: page) {
             return selection
         }
 
-        // 2. Area selection around click point (helps with table cells)
         let scanRadii: [CGFloat] = [8, 16, 30]
         for radius in scanRadii {
             let topLeft = CGPoint(x: point.x - radius, y: point.y - radius)
@@ -221,10 +245,10 @@ class EditablePDFView: PDFView {
             }
         }
 
-        // 3. Offset probing (some PDF text has shifted hit areas)
         let offsets: [(CGFloat, CGFloat)] = [
             (0, 5), (0, -5), (5, 0), (-5, 0),
-            (0, 10), (0, -10), (10, 0), (-10, 0)
+            (0, 10), (0, -10), (10, 0), (-10, 0),
+            (0, 15), (0, -15)
         ]
         for (dx, dy) in offsets {
             let offsetPoint = CGPoint(x: point.x + dx, y: point.y + dy)
@@ -239,9 +263,8 @@ class EditablePDFView: PDFView {
         return nil
     }
 
-    // MARK: - Font Detection
+    // MARK: - Font Detection (Improved)
 
-    /// Extract font name, size, color from the PDF selection's attributed string
     private func detectFontAttributes(selection: PDFSelection, page: PDFPage) {
         guard let attrStr = selection.attributedString, attrStr.length > 0 else {
             let fontSize = estimateFontSize(lineHeight: editingBounds.height)
@@ -251,54 +274,57 @@ class EditablePDFView: PDFView {
             return
         }
 
-        let attrs = attrStr.attributes(at: 0, effectiveRange: nil)
+        // Sample multiple character positions for more reliable detection
+        let samplePositions = [0, min(1, attrStr.length - 1), attrStr.length / 2]
+        var bestFont: NSFont?
+        var bestColor: NSColor = .black
+        var bestAlignment: NSTextAlignment = .left
 
-        // Font
-        if let font = attrs[.font] as? NSFont {
-            let text = selection.string ?? ""
-            let lineCount = max(CGFloat(text.components(separatedBy: .newlines).count), 1)
-            let expectedLineHeight = editingBounds.height / lineCount
-            let maxReasonableSize = expectedLineHeight * 1.1
+        for pos in samplePositions where pos < attrStr.length {
+            let attrs = attrStr.attributes(at: pos, effectiveRange: nil)
 
-            if font.pointSize > 0 && font.pointSize <= maxReasonableSize {
-                detectedFont = font
-            } else {
-                let estimatedSize = estimateFontSize(lineHeight: expectedLineHeight)
-                detectedFont = NSFont(name: font.fontName, size: estimatedSize) ??
+            if let font = attrs[.font] as? NSFont, bestFont == nil {
+                let text = selection.string ?? ""
+                let lineCount = max(CGFloat(text.components(separatedBy: .newlines).count), 1)
+                let expectedLineHeight = editingBounds.height / lineCount
+                let maxReasonableSize = expectedLineHeight * 1.3 // Relaxed from 1.1
+
+                if font.pointSize > 0 && font.pointSize <= maxReasonableSize {
+                    bestFont = font
+                } else {
+                    let estimatedSize = estimateFontSize(lineHeight: expectedLineHeight)
+                    bestFont = NSFont(name: font.fontName, size: estimatedSize) ??
                                NSFont.systemFont(ofSize: estimatedSize)
+                }
             }
-        } else {
-            let fontSize = estimateFontSize(lineHeight: editingBounds.height)
-            detectedFont = NSFont.systemFont(ofSize: fontSize)
+
+            if let color = attrs[.foregroundColor] as? NSColor {
+                bestColor = color
+            }
+            if let para = attrs[.paragraphStyle] as? NSParagraphStyle {
+                bestAlignment = para.alignment
+            }
         }
 
-        // Color
-        detectedFontColor = (attrs[.foregroundColor] as? NSColor) ?? .black
-
-        // Alignment
-        if let para = attrs[.paragraphStyle] as? NSParagraphStyle {
-            detectedAlignment = para.alignment
-        } else {
-            detectedAlignment = .left
-        }
+        detectedFont = bestFont ?? NSFont.systemFont(ofSize: estimateFontSize(lineHeight: editingBounds.height))
+        detectedFontColor = bestColor
+        detectedAlignment = bestAlignment
     }
 
     private func estimateFontSize(lineHeight: CGFloat) -> CGFloat {
-        let estimated = lineHeight / 1.2
+        // Improved: use 1.15 divisor (closer to typical PDF leading)
+        let estimated = lineHeight / 1.15
         return max(min(estimated, 72), 6)
     }
 
-    /// Find closest matching system font for annotation use
     private func fontForAnnotation() -> NSFont {
         let size = detectedFont.pointSize
         let fontName = detectedFont.fontName
 
-        // Try exact font
         if let exactFont = NSFont(name: fontName, size: size) {
             return exactFont
         }
 
-        // Try family with traits
         let familyName = detectedFont.familyName ?? "Helvetica"
         let traits = NSFontManager.shared.traits(of: detectedFont)
         if let familyFont = NSFontManager.shared.font(
@@ -308,14 +334,16 @@ class EditablePDFView: PDFView {
             return familyFont
         }
 
-        // PDF font name mapping fallbacks
         let fontMap: [String: String] = [
             "TimesNewRoman": "Times-Roman", "Times-Roman": "Times-Roman",
             "ArialMT": "Helvetica", "Arial": "Helvetica",
             "CourierNew": "Courier", "Courier-": "Courier",
             "Calibri": "Helvetica", "Cambria": "Times-Roman",
             "Verdana": "Verdana", "Georgia": "Georgia",
-            "Tahoma": "Geneva",
+            "Tahoma": "Geneva", "SegoeUI": "Helvetica",
+            "Roboto": "Helvetica", "OpenSans": "Helvetica",
+            "Lato": "Helvetica", "SourceSansPro": "Helvetica",
+            "NotoSans": "Helvetica",
         ]
         for (key, mapped) in fontMap {
             if fontName.contains(key), let f = NSFont(name: mapped, size: size) {
@@ -326,7 +354,7 @@ class EditablePDFView: PDFView {
         return NSFont.systemFont(ofSize: size)
     }
 
-    // MARK: - Hover Highlight
+    // MARK: - Hover Highlight (Smooth)
 
     private func showHoverHighlight(for page: PDFPage, bounds pageBounds: CGRect) {
         if lastHoverPage === page && lastHoverBounds == pageBounds { return }
@@ -339,10 +367,13 @@ class EditablePDFView: PDFView {
 
         let highlight = NSView(frame: viewRect)
         highlight.wantsLayer = true
-        highlight.layer?.backgroundColor = NSColor.systemBlue.withAlphaComponent(0.06).cgColor
-        highlight.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.25).cgColor
+        highlight.layer?.backgroundColor = hoverHighlightColor.cgColor
+        highlight.layer?.borderColor = hoverBorderColor.cgColor
         highlight.layer?.borderWidth = 1
-        highlight.layer?.cornerRadius = 1
+        highlight.layer?.cornerRadius = 2
+
+        // Fade-in animation
+        highlight.alphaValue = 0
 
         if let documentView = documentView {
             let docRect = documentView.convert(viewRect, from: self)
@@ -353,26 +384,38 @@ class EditablePDFView: PDFView {
         }
 
         hoverHighlight = highlight
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            highlight.animator().alphaValue = 1
+        }
     }
 
     private func hideHoverHighlight() {
-        hoverHighlight?.removeFromSuperview()
+        guard let highlight = hoverHighlight else { return }
+        // Quick fade-out
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.08
+            highlight.animator().alphaValue = 0
+        }, completionHandler: {
+            highlight.removeFromSuperview()
+        })
         hoverHighlight = nil
         lastHoverPage = nil
         lastHoverBounds = .zero
     }
 
-    // MARK: - Inline Editor
+    // MARK: - Inline Editor (Sejda-style)
 
     private func showInlineEditor(for page: PDFPage, bounds pageBounds: CGRect, text: String) {
         editTextView?.removeFromSuperview()
         editContainerView?.removeFromSuperview()
 
         let viewRect = convert(pageBounds, from: page)
-        let padding: CGFloat = 2
-        let editorRect = viewRect.insetBy(dx: -padding, dy: -padding)
+        let padding: CGFloat = 3
+        let editorRect = viewRect.insetBy(dx: -padding - 1, dy: -padding - 1)
 
-        // Scale the detected font size for the view (PDF points → screen pixels)
+        // Scale font for view
         let viewFontSize = max(detectedFont.pointSize * scaleFactor, 8)
         let viewFont: NSFont
         if let scaled = NSFont(name: detectedFont.fontName, size: viewFontSize) {
@@ -381,15 +424,19 @@ class EditablePDFView: PDFView {
             viewFont = NSFont.systemFont(ofSize: viewFontSize)
         }
 
-        // Container
+        // Container with Sejda-style border
         let container = NSView(frame: editorRect)
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor.white.cgColor
-        container.layer?.borderColor = NSColor.systemBlue.withAlphaComponent(0.5).cgColor
-        container.layer?.borderWidth = 1.5
-        container.layer?.cornerRadius = 2
+        container.layer?.borderColor = editorBorderColor.cgColor
+        container.layer?.borderWidth = 2
+        container.layer?.cornerRadius = 3
+        container.layer?.shadowColor = editorShadowColor.cgColor
+        container.layer?.shadowOpacity = 1
+        container.layer?.shadowRadius = 6
+        container.layer?.shadowOffset = CGSize(width: 0, height: -1)
 
-        // NSTextView for editing
+        // NSTextView
         let textStorage = NSTextStorage(string: text, attributes: [
             .font: viewFont,
             .foregroundColor: detectedFontColor
@@ -430,7 +477,13 @@ class EditablePDFView: PDFView {
         textView.maxSize = NSSize(width: editorRect.width - padding * 2, height: 500)
         textView.textContainerInset = NSSize(width: 0, height: 0)
 
+        // Smooth insertion caret color
+        textView.insertionPointColor = editorBorderColor.withAlphaComponent(1.0) as NSColor
+
         container.addSubview(textView)
+
+        // Start transparent for fade-in
+        container.alphaValue = 0
 
         if let documentView = documentView {
             let docRect = documentView.convert(editorRect, from: self)
@@ -448,31 +501,86 @@ class EditablePDFView: PDFView {
         editTextView = textView
         editContainerView = container
 
-        textView.window?.makeFirstResponder(textView)
-        textView.selectAll(nil)
+        // Animate fade-in
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.15
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            container.animator().alphaValue = 1
+        }, completionHandler: {
+            textView.window?.makeFirstResponder(textView)
+            textView.selectAll(nil)
+        })
     }
 
-    /// Reposition the editor overlay when zoom/scroll changes
+    /// Reposition editor on zoom/scroll
     private func repositionEditor() {
-        guard let page = editingPage, editContainerView != nil else { return }
+        guard let page = editingPage, let container = editContainerView, let textView = editTextView else { return }
         let viewRect = convert(editingBounds, from: page)
-        let padding: CGFloat = 2
-        let editorRect = viewRect.insetBy(dx: -padding, dy: -padding)
+        let padding: CGFloat = 3
+        let editorRect = viewRect.insetBy(dx: -padding - 1, dy: -padding - 1)
 
         if let documentView = documentView {
             let docRect = documentView.convert(editorRect, from: self)
-            editContainerView?.frame = docRect
-            editTextView?.frame = NSRect(
+            container.frame = docRect
+            textView.frame = NSRect(
                 x: padding, y: padding,
                 width: docRect.width - padding * 2,
                 height: docRect.height - padding * 2
             )
+
+            // Rescale font on zoom
+            let viewFontSize = max(detectedFont.pointSize * scaleFactor, 8)
+            if let scaled = NSFont(name: detectedFont.fontName, size: viewFontSize) {
+                textView.font = scaled
+            } else {
+                textView.font = NSFont.systemFont(ofSize: viewFontSize)
+            }
         }
     }
 
-    // MARK: - Commit / Cancel
+    // MARK: - Commit / Cancel (Animated)
 
     func commitEdit() {
+        commitEditInternal()
+    }
+
+    /// Animated commit: fade-out editor, then apply annotation
+    private func commitEditAnimated() {
+        guard let container = editContainerView else {
+            commitEditInternal()
+            return
+        }
+
+        // Capture values before cleanup
+        let textView = editTextView
+        let newText = textView?.string ?? ""
+        let page = editingPage
+        let bounds = editingBounds
+        let originalText = editingOriginalText
+        let font = fontForAnnotation()
+        let fontColor = detectedFontColor
+        let alignment = detectedAlignment
+
+        // Fade-out animation
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            container.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            // Apply annotation after fade completes
+            if let page = page, newText != originalText && !newText.isEmpty {
+                self?.applyTextAnnotation(to: page, bounds: bounds, text: newText, font: font, fontColor: fontColor, alignment: alignment)
+            }
+            self?.cleanupEditor()
+        })
+
+        // Clear references so we don't double-commit
+        editTextView = nil
+        editContainerView = nil
+        editingPage = nil
+    }
+
+    private func commitEditInternal() {
         guard let textView = editTextView, let page = editingPage else {
             cleanupEditor()
             return
@@ -483,48 +591,61 @@ class EditablePDFView: PDFView {
 
         if newText != editingOriginalText && !newText.isEmpty {
             let annotFont = fontForAnnotation()
-
-            // Cover original text with white rectangle - expand to fully cover
-            let coverPadding: CGFloat = 2.0
-            let coverBounds = bounds.insetBy(dx: -coverPadding, dy: -coverPadding)
-            let coverAnnotation = PDFAnnotation(bounds: coverBounds, forType: .square, withProperties: nil)
-            coverAnnotation.color = NSColor.white
-            coverAnnotation.interiorColor = NSColor.white
-            let border = PDFBorder()
-            border.lineWidth = 0
-            coverAnnotation.border = border
-            coverAnnotation.contents = "__EDIT_COVER__"
-            page.addAnnotation(coverAnnotation)
-
-            // Compensate for freeText internal padding
-            let freeTextInset: CGFloat = 2.0
-            let textBounds = CGRect(
-                x: bounds.origin.x - freeTextInset,
-                y: bounds.origin.y - freeTextInset,
-                width: bounds.width + freeTextInset * 2,
-                height: bounds.height + freeTextInset * 2
-            )
-
-            let textAnnotation = PDFAnnotation(bounds: textBounds, forType: .freeText, withProperties: nil)
-            textAnnotation.contents = newText
-            textAnnotation.font = annotFont
-            textAnnotation.fontColor = detectedFontColor
-            textAnnotation.color = .clear
-            textAnnotation.alignment = detectedAlignment
-            let textBorder = PDFBorder()
-            textBorder.lineWidth = 0
-            textAnnotation.border = textBorder
-            page.addAnnotation(textAnnotation)
-
-            // BUGFIX: Mark document as having unsaved changes
-            NotificationCenter.default.post(name: .init("AcroromiEditCommitted"), object: nil)
+            applyTextAnnotation(to: page, bounds: bounds, text: newText, font: annotFont, fontColor: detectedFontColor, alignment: detectedAlignment)
         }
 
         cleanupEditor()
     }
 
+    private func applyTextAnnotation(to page: PDFPage, bounds: CGRect, text: String, font: NSFont, fontColor: NSColor, alignment: NSTextAlignment) {
+        // Cover original text
+        let coverPadding: CGFloat = 2.0
+        let coverBounds = bounds.insetBy(dx: -coverPadding, dy: -coverPadding)
+        let coverAnnotation = PDFAnnotation(bounds: coverBounds, forType: .square, withProperties: nil)
+        coverAnnotation.color = NSColor.white
+        coverAnnotation.interiorColor = NSColor.white
+        let border = PDFBorder()
+        border.lineWidth = 0
+        coverAnnotation.border = border
+        coverAnnotation.contents = "__EDIT_COVER__"
+        page.addAnnotation(coverAnnotation)
+
+        // FreeText annotation
+        let freeTextInset: CGFloat = 2.0
+        let textBounds = CGRect(
+            x: bounds.origin.x - freeTextInset,
+            y: bounds.origin.y - freeTextInset,
+            width: bounds.width + freeTextInset * 2,
+            height: bounds.height + freeTextInset * 2
+        )
+
+        let textAnnotation = PDFAnnotation(bounds: textBounds, forType: .freeText, withProperties: nil)
+        textAnnotation.contents = text
+        textAnnotation.font = font
+        textAnnotation.fontColor = fontColor
+        textAnnotation.color = .clear
+        textAnnotation.alignment = alignment
+        let textBorder = PDFBorder()
+        textBorder.lineWidth = 0
+        textAnnotation.border = textBorder
+        page.addAnnotation(textAnnotation)
+
+        NotificationCenter.default.post(name: .init("AcroromiEditCommitted"), object: nil)
+    }
+
     func cancelEdit() {
-        cleanupEditor()
+        guard let container = editContainerView else {
+            cleanupEditor()
+            return
+        }
+
+        // Fade-out on cancel too
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.1
+            container.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            self?.cleanupEditor()
+        })
     }
 
     private func cleanupEditor() {
@@ -535,7 +656,6 @@ class EditablePDFView: PDFView {
         editingPage = nil
         editingBounds = .zero
         editingOriginalText = ""
-        // Reset detected attributes so they don't leak to next edit
         detectedFont = NSFont.systemFont(ofSize: 12)
         detectedFontColor = .black
         detectedAlignment = .left
@@ -552,15 +672,46 @@ extension EditablePDFView: NSTextViewDelegate {
         }
         if commandSelector == #selector(NSResponder.insertNewline(_:)) {
             if NSEvent.modifierFlags.contains(.shift) {
-                return false // Allow Shift+Enter for newline
+                return false // Shift+Enter = newline
             }
-            commitEdit()
+            commitEditAnimated()
             return true
         }
         if commandSelector == #selector(NSResponder.insertTab(_:)) {
-            commitEdit()
+            commitEditAnimated()
             return true
         }
         return false
+    }
+
+    // Auto-resize editor as user types
+    func textDidChange(_ notification: Notification) {
+        guard let textView = editTextView, let container = editContainerView else { return }
+        let padding: CGFloat = 3
+
+        // Calculate needed height
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+        let usedRect = textView.layoutManager?.usedRect(for: textView.textContainer!) ?? .zero
+        let neededHeight = usedRect.height + padding * 2 + 4
+
+        // Only grow, don't shrink below original
+        let minHeight = container.frame.height
+        if neededHeight > minHeight {
+            var newFrame = container.frame
+            // Expand downward (PDF coordinate: expand upward in view)
+            newFrame.size.height = neededHeight
+            newFrame.origin.y = container.frame.maxY - neededHeight
+
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.08
+                container.animator().frame = newFrame
+            }
+
+            textView.frame = NSRect(
+                x: padding, y: padding,
+                width: newFrame.width - padding * 2,
+                height: neededHeight - padding * 2
+            )
+        }
     }
 }
