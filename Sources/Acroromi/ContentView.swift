@@ -6,20 +6,29 @@ struct ContentView: View {
 
     var body: some View {
         @Bindable var state = appState
-        NavigationSplitView {
+        VStack(spacing: 0) {
+            // Sejda-style horizontal tool mode tabs (only when doc is open)
             if appState.hasDocument {
-                SidebarView()
+                SejdaToolModeTabs()
+                Divider()
             }
-        } detail: {
-            VStack(spacing: 0) {
-                // Feature toolbar (context-sensitive)
-                if appState.hasDocument {
-                    featureToolbar
-                }
 
-                // Search bar
-                if appState.showSearchBar {
-                    SearchBarView()
+            // Feature toolbar (context-sensitive)
+            if appState.hasDocument {
+                featureToolbar
+            }
+
+            // Search bar
+            if appState.showSearchBar {
+                SearchBarView()
+                Divider()
+            }
+
+            // Main content area
+            HStack(spacing: 0) {
+                // Left sidebar (thumbnails) — Sejda puts it left
+                if appState.hasDocument && appState.showSidebar {
+                    SidebarView()
                     Divider()
                 }
 
@@ -29,17 +38,14 @@ struct ContentView: View {
                 } else {
                     WelcomeView()
                 }
+            }
 
-                // Status bar
-                if appState.hasDocument {
-                    Divider()
-                    StatusBarView()
-                }
+            // Status bar
+            if appState.hasDocument {
+                Divider()
+                StatusBarView()
             }
         }
-        .navigationSplitViewColumnWidth(min: AppConstants.sidebarMinWidth,
-                                         ideal: 200,
-                                         max: AppConstants.sidebarMaxWidth)
         .toolbar {
             MainToolbar()
         }
@@ -52,7 +58,7 @@ struct ContentView: View {
         .onDrop(of: [.pdf], isTargeted: nil) { providers in
             handleFileDrop(providers)
         }
-        .frame(minWidth: 800, minHeight: 600)
+        .frame(minWidth: 900, minHeight: 650)
     }
 
     @ViewBuilder
@@ -65,7 +71,7 @@ struct ContentView: View {
             EditorToolbarView()
             Divider()
         case .organize:
-            EmptyView() // Organizer replaces the main content
+            EmptyView()
         case .formSign:
             FormSignToolbarView()
             Divider()
@@ -82,19 +88,27 @@ struct ContentView: View {
             CompareToolbarView()
             Divider()
         case .protect:
-            HStack {
+            HStack(spacing: 12) {
                 Button(action: { appState.showProtectionSheet = true }) {
-                    Label("Set Password & Permissions", systemImage: "lock.shield")
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.shield.fill")
+                        Text("Set Password & Permissions")
+                    }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(SejdaTheme.primary)
                 Spacer()
                 if appState.documentState.isEncrypted {
-                    Label("Document is encrypted", systemImage: "lock.fill")
-                        .font(.caption)
-                        .foregroundColor(.green)
+                    HStack(spacing: 4) {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(SejdaTheme.teal)
+                        Text("Encrypted")
+                            .font(.system(size: 12))
+                            .foregroundColor(SejdaTheme.teal)
+                    }
                 }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(Color(nsColor: .controlBackgroundColor))
             Divider()
@@ -129,5 +143,29 @@ struct ContentView: View {
             }
         }
         return true
+    }
+}
+
+// MARK: - Sejda-style Horizontal Tool Mode Tabs
+struct SejdaToolModeTabs: View {
+    @Environment(AppState.self) var appState
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 0) {
+                ForEach(ToolMode.allCases) { mode in
+                    Button(action: { appState.activeToolMode = mode }) {
+                        HStack(spacing: 5) {
+                            Image(systemName: mode.icon)
+                                .font(.system(size: 12))
+                            Text(mode.label)
+                        }
+                    }
+                    .buttonStyle(SejdaTabButton(isSelected: appState.activeToolMode == mode))
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }

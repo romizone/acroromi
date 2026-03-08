@@ -7,50 +7,63 @@ struct AnnotationToolbarView: View {
     var body: some View {
         @Bindable var state = appState
         VStack(spacing: 0) {
+            // Sejda-style horizontal annotation tool tabs
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     ForEach(AnnotationTool.allCases) { tool in
                         Button(action: { appState.annotationTool = tool }) {
-                            VStack(spacing: 2) {
+                            HStack(spacing: 5) {
                                 Image(systemName: tool.icon)
-                                    .font(.title3)
+                                    .font(.system(size: 12))
                                 Text(tool.label)
-                                    .font(.system(size: 9))
+                                    .font(.system(size: 11, weight: .medium))
                             }
-                            .frame(width: 60, height: 44)
-                            .background(appState.annotationTool == tool ?
-                                        Color.accentColor.opacity(0.2) : Color.clear)
-                            .cornerRadius(8)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SejdaToolbarButton(isSelected: appState.annotationTool == tool))
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
             }
 
             Divider()
 
-            HStack(spacing: 12) {
-                ColorPicker("Color", selection: $state.annotationColor)
-                    .frame(width: 100)
+            // Properties bar
+            HStack(spacing: 14) {
+                HStack(spacing: 6) {
+                    Text("Color")
+                        .font(.system(size: 11))
+                        .foregroundColor(SejdaTheme.textSecondary)
+                    ColorPicker("", selection: $state.annotationColor)
+                        .labelsHidden()
+                }
+
+                Divider().frame(height: 16)
 
                 HStack(spacing: 4) {
-                    Text("Width:")
-                        .font(.caption)
+                    Text("Width")
+                        .font(.system(size: 11))
+                        .foregroundColor(SejdaTheme.textSecondary)
                     Slider(value: $state.annotationLineWidth, in: 1...10, step: 0.5)
                         .frame(width: 80)
                     Text("\(appState.annotationLineWidth, specifier: "%.1f")")
-                        .font(.caption)
-                        .frame(width: 30)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(SejdaTheme.textSecondary)
+                        .frame(width: 28)
                 }
 
                 Spacer()
 
-                Button("Clear All Annotations") {
-                    clearAllAnnotations()
+                Button(action: clearAllAnnotations) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 10))
+                        Text("Clear All")
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(SejdaTheme.danger)
                 }
-                .foregroundColor(.red)
-                .font(.caption)
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)

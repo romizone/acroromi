@@ -7,26 +7,34 @@ struct SearchBarView: View {
         @Bindable var docState = appState.documentState
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
+                .font(.system(size: 12))
+                .foregroundColor(SejdaTheme.textSecondary)
 
             TextField("Find in document...", text: $docState.searchText)
                 .textFieldStyle(.plain)
+                .font(.system(size: 12))
                 .onSubmit {
                     appState.documentState.performSearch()
                 }
 
             if !appState.documentState.searchResults.isEmpty {
                 Text("\(appState.documentState.currentSearchIndex + 1)/\(appState.documentState.searchResults.count)")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(SejdaTheme.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(SejdaTheme.controlBg)
+                    .cornerRadius(4)
 
                 Button(action: { _ = appState.documentState.previousSearchResult() }) {
                     Image(systemName: "chevron.up")
+                        .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.borderless)
 
                 Button(action: { _ = appState.documentState.nextSearchResult() }) {
                     Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.borderless)
             }
@@ -37,11 +45,12 @@ struct SearchBarView: View {
                 appState.documentState.searchResults = []
             }) {
                 Image(systemName: "xmark.circle.fill")
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 12))
+                    .foregroundColor(SejdaTheme.textSecondary)
             }
             .buttonStyle(.borderless)
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .background(Color(nsColor: .controlBackgroundColor))
     }

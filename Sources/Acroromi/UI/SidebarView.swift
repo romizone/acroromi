@@ -7,16 +7,35 @@ struct SidebarView: View {
     var body: some View {
         @Bindable var state = appState
         VStack(spacing: 0) {
-            // Tab picker
-            Picker("", selection: $state.activeSidebarTab) {
+            // Sejda-style tab icons row
+            HStack(spacing: 0) {
                 ForEach(SidebarTab.allCases) { tab in
-                    Image(systemName: tab.icon)
-                        .tag(tab)
-                        .help(tab.label)
+                    Button(action: { appState.activeSidebarTab = tab }) {
+                        VStack(spacing: 3) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 13))
+                            Text(tab.label)
+                                .font(.system(size: 9, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .foregroundColor(appState.activeSidebarTab == tab ?
+                                        SejdaTheme.primary : SejdaTheme.textSecondary)
+                        .background(appState.activeSidebarTab == tab ?
+                                   SejdaTheme.primary.opacity(0.08) : Color.clear)
+                        .overlay(
+                            VStack {
+                                Spacer()
+                                Rectangle()
+                                    .fill(appState.activeSidebarTab == tab ? SejdaTheme.primary : Color.clear)
+                                    .frame(height: 2)
+                            }
+                        )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-            .pickerStyle(.segmented)
-            .padding(8)
+            .background(Color(nsColor: .controlBackgroundColor))
 
             Divider()
 
@@ -32,7 +51,8 @@ struct SidebarView: View {
                 SearchSidebarView()
             }
         }
-        .frame(minWidth: AppConstants.sidebarMinWidth, maxWidth: AppConstants.sidebarMaxWidth)
+        .frame(width: 190)
+        .background(SejdaTheme.sidebarBg)
     }
 }
 
@@ -42,7 +62,7 @@ struct ThumbnailListView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 8) {
+                LazyVStack(spacing: 6) {
                     if let doc = appState.documentState.pdfDocument {
                         ForEach(0..<doc.pageCount, id: \.self) { index in
                             ThumbnailItemView(
@@ -76,21 +96,29 @@ struct ThumbnailItemView: View {
     var body: some View {
         VStack(spacing: 4) {
             if let page = document.page(at: pageIndex) {
-                let thumb = page.thumbnail(of: AppConstants.thumbnailSize, for: .mediaBox)
+                let thumb = page.thumbnail(of: CGSize(width: 140, height: 190), for: .mediaBox)
                 Image(nsImage: thumb)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .frame(maxHeight: 180)
-                    .border(isSelected ? Color.accentColor : Color.gray.opacity(0.3), width: isSelected ? 3 : 1)
-                    .shadow(color: .black.opacity(0.1), radius: 2)
+                    .frame(maxWidth: 160, maxHeight: 180)
+                    .background(Color.white)
+                    .cornerRadius(3)
+                    .shadow(color: .black.opacity(0.12), radius: 3, x: 0, y: 1)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .stroke(isSelected ? SejdaTheme.primary : Color.clear, lineWidth: 2.5)
+                    )
             }
             Text("\(pageIndex + 1)")
-                .font(.caption)
-                .foregroundColor(isSelected ? .accentColor : .secondary)
+                .font(.system(size: 10, weight: isSelected ? .bold : .regular))
+                .foregroundColor(isSelected ? SejdaTheme.primary : SejdaTheme.textSecondary)
         }
-        .padding(4)
-        .background(isSelected ? Color.accentColor.opacity(0.1) : Color.clear)
-        .cornerRadius(8)
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? SejdaTheme.primary.opacity(0.08) : Color.clear)
+        )
     }
 }
 
@@ -103,9 +131,16 @@ struct BookmarkListView: View {
                 if let outline = appState.documentState.pdfDocument?.outlineRoot {
                     OutlineNodeView(outline: outline, level: 0)
                 } else {
-                    Text("No bookmarks")
-                        .foregroundColor(.secondary)
-                        .padding()
+                    VStack(spacing: 8) {
+                        Image(systemName: "bookmark.slash")
+                            .font(.title3)
+                            .foregroundColor(SejdaTheme.textSecondary)
+                        Text("No bookmarks")
+                            .font(.system(size: 12))
+                            .foregroundColor(SejdaTheme.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 40)
                 }
             }
             .padding(8)
@@ -128,7 +163,6 @@ struct OutlineNodeView: View {
     }
 }
 
-/// Each outline item manages its own expand/collapse state independently
 struct OutlineItemView: View {
     let item: PDFOutline
     let level: Int
@@ -137,11 +171,12 @@ struct OutlineItemView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack {
+            HStack(spacing: 4) {
                 if item.numberOfChildren > 0 {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundColor(SejdaTheme.textSecondary)
+                        .frame(width: 12)
                         .onTapGesture { isExpanded.toggle() }
                 }
                 Button(action: {
@@ -152,13 +187,14 @@ struct OutlineItemView: View {
                     }
                 }) {
                     Text(item.label ?? "Untitled")
-                        .font(.callout)
+                        .font(.system(size: 11))
+                        .foregroundColor(SejdaTheme.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.leading, CGFloat(level * 16))
+            .padding(.leading, CGFloat(level * 14))
 
             if isExpanded && item.numberOfChildren > 0 {
                 OutlineNodeView(outline: item, level: level + 1)
@@ -172,13 +208,20 @@ struct AnnotationListView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
+            LazyVStack(alignment: .leading, spacing: 6) {
                 if let doc = appState.documentState.pdfDocument {
                     let allAnnotations = collectAnnotations(from: doc)
                     if allAnnotations.isEmpty {
-                        Text("No annotations")
-                            .foregroundColor(.secondary)
-                            .padding()
+                        VStack(spacing: 8) {
+                            Image(systemName: "text.bubble")
+                                .font(.title3)
+                                .foregroundColor(SejdaTheme.textSecondary)
+                            Text("No annotations")
+                                .font(.system(size: 12))
+                                .foregroundColor(SejdaTheme.textSecondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 40)
                     } else {
                         ForEach(Array(allAnnotations.enumerated()), id: \.offset) { _, item in
                             AnnotationItemView(annotation: item.annotation, pageIndex: item.pageIndex)
@@ -216,19 +259,20 @@ struct AnnotationItemView: View {
     let pageIndex: Int
 
     var body: some View {
-        HStack {
+        HStack(spacing: 8) {
             Image(systemName: iconForAnnotation(annotation))
-                .foregroundColor(.accentColor)
-                .frame(width: 20)
+                .font(.system(size: 11))
+                .foregroundColor(SejdaTheme.primary)
+                .frame(width: 16)
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(annotation.type ?? "Annotation")
-                    .font(.caption)
-                    .fontWeight(.medium)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(SejdaTheme.textPrimary)
                 if let contents = annotation.contents, !contents.isEmpty {
                     Text(contents)
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 9))
+                        .foregroundColor(SejdaTheme.textSecondary)
                         .lineLimit(2)
                 }
             }
@@ -236,10 +280,14 @@ struct AnnotationItemView: View {
             Spacer()
 
             Text("p.\(pageIndex + 1)")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundColor(SejdaTheme.textSecondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(SejdaTheme.controlBg)
+                .cornerRadius(4)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 5)
         .padding(.horizontal, 8)
         .background(Color(nsColor: .controlBackgroundColor))
         .cornerRadius(6)
@@ -267,30 +315,33 @@ struct SearchSidebarView: View {
     var body: some View {
         @Bindable var docState = appState.documentState
         VStack(spacing: 8) {
-            HStack {
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11))
+                    .foregroundColor(SejdaTheme.textSecondary)
                 TextField("Search...", text: $docState.searchText)
                     .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 11))
                     .onSubmit {
                         appState.documentState.performSearch()
                     }
-                Button(action: { appState.documentState.performSearch() }) {
-                    Image(systemName: "magnifyingglass")
-                }
             }
             .padding(.horizontal, 8)
 
             if !appState.documentState.searchResults.isEmpty {
                 HStack {
                     Text("\(appState.documentState.searchResults.count) results")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(SejdaTheme.textSecondary)
                     Spacer()
                     Button(action: { _ = appState.documentState.previousSearchResult() }) {
                         Image(systemName: "chevron.up")
+                            .font(.system(size: 10))
                     }
                     .buttonStyle(.borderless)
                     Button(action: { _ = appState.documentState.nextSearchResult() }) {
                         Image(systemName: "chevron.down")
+                            .font(.system(size: 10))
                     }
                     .buttonStyle(.borderless)
                 }
@@ -309,19 +360,20 @@ struct SearchSidebarView: View {
                         }) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(selection.string ?? "")
-                                    .font(.caption)
+                                    .font(.system(size: 10))
+                                    .foregroundColor(SejdaTheme.textPrimary)
                                     .lineLimit(2)
                                 if let page = selection.pages.first,
                                    let doc = appState.documentState.pdfDocument {
                                     Text("Page \(doc.index(for: page) + 1)")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                        .font(.system(size: 9))
+                                        .foregroundColor(SejdaTheme.textSecondary)
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(6)
                             .background(idx == appState.documentState.currentSearchIndex ?
-                                        Color.accentColor.opacity(0.1) : Color.clear)
+                                        SejdaTheme.primary.opacity(0.1) : Color.clear)
                             .cornerRadius(4)
                         }
                         .buttonStyle(.plain)

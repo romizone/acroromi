@@ -7,39 +7,23 @@ struct MainToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .navigation) {
             Button(action: { appState.showSidebar.toggle() }) {
-                Image(systemName: "sidebar.left")
+                Image(systemName: appState.showSidebar ? "sidebar.left" : "sidebar.left")
+                    .foregroundColor(appState.showSidebar ? SejdaTheme.primary : .secondary)
             }
-            .help("Toggle Sidebar")
+            .help("Toggle Pages Panel")
         }
 
         ToolbarItemGroup(placement: .principal) {
             if appState.hasDocument {
-                ToolModePicker()
+                HStack(spacing: 12) {
+                    PageNavigationBar()
+                    Divider().frame(height: 18)
+                    ZoomControls()
+                    Divider().frame(height: 18)
+                    DisplayModePicker()
+                }
             }
         }
-
-        ToolbarItemGroup(placement: .automatic) {
-            if appState.hasDocument {
-                ZoomControls()
-                DisplayModePicker()
-            }
-        }
-    }
-}
-
-struct ToolModePicker: View {
-    @Environment(AppState.self) var appState
-
-    var body: some View {
-        @Bindable var state = appState
-        Picker("Mode", selection: $state.activeToolMode) {
-            ForEach(ToolMode.allCases) { mode in
-                Label(mode.label, systemImage: mode.icon)
-                    .tag(mode)
-            }
-        }
-        .pickerStyle(.menu)
-        .frame(width: 160)
     }
 }
 
@@ -47,7 +31,7 @@ struct ZoomControls: View {
     @Environment(AppState.self) var appState
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             Button(action: {
                 appState.documentState.scaleFactor = max(
                     AppConstants.minZoom,
@@ -55,12 +39,15 @@ struct ZoomControls: View {
                 )
             }) {
                 Image(systemName: "minus.magnifyingglass")
+                    .font(.system(size: 13))
             }
+            .buttonStyle(.borderless)
             .help("Zoom Out")
 
             Text(appState.documentState.zoomPercentage)
-                .font(.caption)
-                .frame(width: 45)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(SejdaTheme.textSecondary)
+                .frame(width: 42)
 
             Button(action: {
                 appState.documentState.scaleFactor = min(
@@ -69,7 +56,9 @@ struct ZoomControls: View {
                 )
             }) {
                 Image(systemName: "plus.magnifyingglass")
+                    .font(.system(size: 13))
             }
+            .buttonStyle(.borderless)
             .help("Zoom In")
         }
     }
@@ -80,13 +69,13 @@ struct DisplayModePicker: View {
 
     var body: some View {
         @Bindable var docState = appState.documentState
-        Picker("Display", selection: $docState.displayMode) {
+        Picker("", selection: $docState.displayMode) {
             ForEach(PDFDisplayModeOption.allCases) { mode in
-                Text(mode.label).tag(mode)
+                Label(mode.label, systemImage: mode.icon).tag(mode)
             }
         }
         .pickerStyle(.menu)
-        .frame(width: 140)
+        .frame(width: 150)
     }
 }
 
@@ -95,24 +84,36 @@ struct PageNavigationBar: View {
     @State private var pageInputText: String = ""
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 4) {
             Button(action: goToPreviousPage) {
                 Image(systemName: "chevron.left")
+                    .font(.system(size: 11, weight: .semibold))
             }
+            .buttonStyle(.borderless)
             .disabled(appState.documentState.currentPageIndex <= 0)
 
-            TextField("Page", text: $pageInputText)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 50)
-                .multilineTextAlignment(.center)
-                .onSubmit { goToPage() }
+            HStack(spacing: 2) {
+                TextField("", text: $pageInputText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 36)
+                    .multilineTextAlignment(.center)
+                    .font(.system(size: 11))
+                    .onSubmit { goToPage() }
 
-            Text("/ \(appState.documentState.totalPages)")
-                .foregroundColor(.secondary)
+                Text("/")
+                    .font(.system(size: 11))
+                    .foregroundColor(SejdaTheme.textSecondary)
+
+                Text("\(appState.documentState.totalPages)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(SejdaTheme.textSecondary)
+            }
 
             Button(action: goToNextPage) {
                 Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
             }
+            .buttonStyle(.borderless)
             .disabled(appState.documentState.currentPageIndex >= appState.documentState.totalPages - 1)
         }
         .onChange(of: appState.documentState.currentPageIndex) { _, newValue in

@@ -136,6 +136,15 @@ enum PDFDisplayModeOption: String, CaseIterable, Identifiable {
         case .twoUpContinuous: return "Two Pages Continuous"
         }
     }
+
+    var icon: String {
+        switch self {
+        case .singlePage: return "doc"
+        case .singleContinuous: return "doc.text"
+        case .twoUp: return "book"
+        case .twoUpContinuous: return "book.pages"
+        }
+    }
 }
 
 enum ExportFormat: String, CaseIterable, Identifiable {
